@@ -35,8 +35,8 @@ SET (CAFFE_GOOGLELOG_LIBRARY
     /home/trbatcha/tools/usr/lib/libglog.so
     CACHE FILEPATH "Google Log library" 
     )
-SET (CAFFE_GOOGLEFLAGS_LIBRARY
-    /home/trbatcha/gflags-2.1.1/build/lib/libgflags.a
+SET (CAFFE_GOOGLEFLAG_LIBRARY
+    /home/trbatcha/gflags-2.1.1/build/lib/libgflags.so
     CACHE FILEPATH "Google Flags library" 
     )
 SET (CAFFE_GOOGLEFLAGS_INCLUDE
@@ -141,7 +141,7 @@ SET (CAFFE_LIBRARIES
     ${CAFFE_PROTOBUF_LIBRARY}
     ${CAFFE_PROTOBUFLITE_LIBRARY}
     ${CAFFE_GOOGLELOG_LIBRARY}
-    ${CAFFE_GOOGLEFLAGS_LIBRARY}
+    ${CAFFE_GOOGLEFLAG_LIBRARY}
     ${CAFFE_LEVELDB_LIBRARY}
     ${CAFFE_LMDB_LIBRARY}
     ${CAFFE_HDF5_LIBRARY}
@@ -171,4 +171,4 @@ SET (CAFFE_INCLUDE_DIRS
      ${CAFFE_CUDA_INCLUDE}
     )
 ADD_SUBDIRECTORY(detectorService)
-#ADD_SUBDIRECTORY(trainerService)
+ADD_SUBDIRECTORY(trainerService)

@@ -74,6 +74,7 @@ using namespace cvac;
 using namespace Ice;
 
 
+
 ///////////////////////////////////////////////////////////////////////////////
 // This is called by IceBox to get the service to communicate with.
 extern "C"
@@ -231,7 +232,8 @@ bool CaffeDetectI::readModelFile( string model, string clientDir)
         res = false;
     }
     string lookup = dda.getFile(LOOKUPID);
-    createLookupTbl(lookup);
+    if (!lookup.empty())
+	createLookupTbl(lookup);
     // change back to original directory
     chdir(curDir.c_str());
     return res;
@@ -301,7 +303,7 @@ std::string CaffeDetectI::getName(const ::Ice::Current& current)
 
 std::string CaffeDetectI::getDescription(const ::Ice::Current& current)
 {
-  return "OpenCV Cascade Detector (boost)";
+  return "Caffe Detector";
 }
 
 void CaffeDetectI::setVerbosity(::Ice::Int verbosity, const ::Ice::Current& current)
@@ -448,17 +450,26 @@ void CaffeDetectI::process( const Identity &client,
               int idx = (int)score;
 	      const std::string& output_name = mCaffe_net->blob_names()[
 		    mCaffe_net->output_blob_indices()[j]];
-	      string labelname = mLookup[idx];
-              if (output_name == "output")
-              {
-		  // Lookup what the class id is and return that
-                  labelname = mLookup[idx];
-		  size_t sidx = labelname.find_first_of(',');
-		  if (sidx != string::npos)
+	      printf("output=%s, score=%g\n", output_name.c_str(), score);
+	      if (output_name == "output")
+	      {
+		  string labelname;
+		  if (!mLookup.empty())
 		  {
-		      labelname = labelname.substr(0,sidx);
-	          }
-		  printf("class=%d, labelName=%s\n", idx, labelname.c_str());
+		      // Lookup what the class id is and return that
+		      labelname = mLookup[idx];
+		      size_t sidx = labelname.find_first_of(',');
+		      if (sidx != string::npos)
+			  labelname = labelname.substr(0,sidx);
+		      printf("classid=%d, labelName=%s\n", idx, 
+		           labelname.c_str());
+		  }else
+		  {
+		      char buffer[64];
+		      sprintf(buffer, "%d", idx);
+		      labelname = buffer;
+		      printf("labelName=%s\n", labelname.c_str());
+		  }
 		  // Send the result back to client
 		  LabelablePtr newFound = new Labelable();
 		  newFound->lab.hasLabel = true;
@@ -479,6 +490,7 @@ void CaffeDetectI::process( const Identity &client,
 
   // We are done so send any final results
   mServiceMan->clearStop();
+  delete mCaffe_net;  // Free up resources
 
   localAndClientMsg(VLogger::DEBUG, NULL, "process complete.\n");
   //////////////////////////////////////////////////////////////////////////
