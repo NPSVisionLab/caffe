@@ -285,7 +285,7 @@ void CaffeTrainerI::process( const Identity &client,
 	}
 	if (mTrainerProps->shuffle)
 	{
-	    optionString << "--shuffle";
+	    optionString << " --shuffle ";
 	}
 	// Remove the old db directories if they exist
 	deleteDirectory(m_CVAC_DataDir + "/" + 
@@ -367,12 +367,15 @@ void CaffeTrainerI::process( const Identity &client,
         localAndClientMsg(VLogger::INFO, callback,
 		   "Continuing training from snapshot %s", 
 		    mTrainerProps->snapshot.c_str());
-        solver->Solve(mTrainerProps->snapshot); 
+	string sfile =  m_CVAC_DataDir + "/" + mTrainerProps->snapshot;
+        solver->Solve(sfile); 
     }else if (!mTrainerProps->weights.empty())
     {
         localAndClientMsg(VLogger::INFO, callback,
 		   "Finetuning training from weights %s", 
 		   mTrainerProps->weights.c_str());
+	string wfile =  m_CVAC_DataDir + "/" + mTrainerProps->weights;
+	solver->net()->CopyTrainedLayersFrom(wfile);
         solver->Solve();
     }else
     {
