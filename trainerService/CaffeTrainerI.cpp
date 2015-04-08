@@ -158,15 +158,15 @@ void CaffeTrainerI::process( const Identity &client,
     callback = TrainerCallbackHandlerPrx::uncheckedCast(
             current.con->createProxy(client)->ice_oneway());
 
-    if (mTrainerProps->solver.empty())
+    if (mTrainerProps->solver.size() == 0)
     {
         localAndClientMsg(VLogger::ERROR, callback, 
 	                  "Solver must be passed in trainer properties!"
 			  );
         return;
     }
-    if (mTrainerProps->snapshot.empty() == false &&
-        mTrainerProps->weights.empty() == false)
+    if (mTrainerProps->snapshot.size() > 0 &&
+        mTrainerProps->weights.size() > 0)
     {
         localAndClientMsg(VLogger::ERROR, callback, 
 		  "Properties must not have both snapshot and weights files!"
@@ -331,7 +331,7 @@ void CaffeTrainerI::process( const Identity &client,
 	    return;
 	}
 	// compute the image mean
-	if (mTrainerProps->meanName.empty() == false)
+	if (mTrainerProps->meanName.size() > 0)
 	{
 	    string meanName = m_CVAC_DataDir + "/" + mTrainerProps->meanName;
 	    localAndClientMsg(VLogger::INFO, callback,
@@ -362,14 +362,14 @@ void CaffeTrainerI::process( const Identity &client,
 	Caffe::set_mode(Caffe::CPU);
     shared_ptr<caffe::Solver<float> > solver(
                                 caffe::GetSolver<float>(solver_param));
-    if (!mTrainerProps->snapshot.empty())
+    if (mTrainerProps->snapshot.size() > 0)
     {
         localAndClientMsg(VLogger::INFO, callback,
 		   "Continuing training from snapshot %s", 
 		    mTrainerProps->snapshot.c_str());
 	string sfile =  m_CVAC_DataDir + "/" + mTrainerProps->snapshot;
         solver->Solve(sfile); 
-    }else if (!mTrainerProps->weights.empty())
+    }else if (mTrainerProps->weights.size() > 0)
     {
         localAndClientMsg(VLogger::INFO, callback,
 		   "Finetuning training from weights %s", 
@@ -415,7 +415,7 @@ void CaffeTrainerI::process( const Identity &client,
     dda.addFile(MODELID, proto_filename);
     dda.addFile(WEIGHTID, model_filename);
     string meanName;
-    if (mTrainerProps->meanName.empty())
+    if (mTrainerProps->meanName.size() == 0)
     {
 	//TODO fetch the name from the trasform_param of the data layer
         //caffe::NetParameter* np = solver_param.net_param_;
