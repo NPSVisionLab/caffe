@@ -405,9 +405,12 @@ void CaffeDetectI::process( const Identity &client,
     Result &curres = mRunsetIterator.getCurrentResult();
     resultList.push_back(&curres);
     labelList.push_back(&labelable);
-   
-    string fullname = getFSPath( RunSetWrapper::getFilePath(labelable), 
-                                m_CVAC_DataDir );
+    string fullname;
+    FilePath fpath = RunSetWrapper::getFilePath(labelable);
+    if (pathAbsolute(fpath.directory.relativePath))
+        fullname = fpath.directory.relativePath + "/" + fpath.filename;
+    else
+        fullname = getFSPath( fpath, m_CVAC_DataDir );
     tempf << fullname << " 0" << endl; 
     cnt++;
   }  

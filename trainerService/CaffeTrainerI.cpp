@@ -251,10 +251,15 @@ void CaffeTrainerI::process( const Identity &client,
 	        break;
 	    }
 	    cvac::Labelable& labelable = *(mRunsetIterator.getNext());
-   
-	    string fullname = getFSPath( 
-	                        RunSetWrapper::getFilePath(labelable), 
-                                m_CVAC_DataDir );
+	    // If we had to create a symbolic link then we already
+	    // have a abs path so don't add m_CVAC_DataDir
+	    FilePath fpath =  RunSetWrapper::getFilePath(labelable);
+	    string fullname;
+	    if (pathAbsolute(fpath.directory.relativePath))
+	        fullname = fpath.directory.relativePath + "/" + 
+            		           fpath.filename;
+            else
+	        fullname = getFSPath(fpath, m_CVAC_DataDir );
 
             long rannum = random();
 	    float fran = rannum / (float)RAND_MAX; 
@@ -406,7 +411,15 @@ void CaffeTrainerI::process( const Identity &client,
     model_filename = filename + ".caffemodel";
     dda.addFile(MODELID, proto_filename);
     dda.addFile(WEIGHTID, model_filename);
-    string meanName = m_CVAC_DataDir + "/" + mTrainerProps->meanName;
+    string meanName;
+    if (mTrainerProps->meanName.empty())
+    {
+	//TODO fetch the name from the trasform_param of the data layer
+        //caffe::NetParameter* np = solver_param.net_param_;
+	// For now just use the default imagenet mean
+	meanName = m_CVAC_DataDir + "/" + "imagenet_mean.binaryproto";
+    }else
+	meanName = m_CVAC_DataDir + "/" + mTrainerProps->meanName;
     if (fileExists(meanName) == false)
     {
         localAndClientMsg(VLogger::WARN, callback,
@@ -454,7 +467,7 @@ TrainerPropertiesI::TrainerPropertiesI()
     videoFPS = -1.0;
     gpu = true;
     useExistingData = false;
-    shuffle = false;
+    shuffle = true;
     validateRatio = 0.2f;
     randomSeed = 1234;
     dbType = "lmdb";
