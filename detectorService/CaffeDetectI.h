@@ -75,7 +75,7 @@ class DetectorPropertiesI : public cvac::DetectorProperties
   std::string callbackFreq;
   bool gpu;
   int iterations;
-
+  string fileList;
 
 };
 
@@ -103,7 +103,8 @@ private:
     
     bool initialize(const ::cvac::DetectorProperties& props,
                     const ::cvac::FilePath& model, const ::Ice::Current& current);
-    bool readModelFile( std::string modelFSpath, std::string clientDir);
+    bool readModelFile( std::string modelFSpath, std::string clientDir,
+                        std::string fileList);
     std::string getClientDirectory( const ::Ice::Current& current);
     bool createLookupTbl(std::string lookupFileName);
 

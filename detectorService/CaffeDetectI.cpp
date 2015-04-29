@@ -60,6 +60,7 @@
 
 #include "caffe/caffe.hpp"
 #include "caffe/proto/caffe.pb.h"
+#include "caffe/util/upgrade_proto.hpp"
 
 using caffe::Blob;
 using caffe::Caffe;
@@ -179,7 +180,8 @@ string CaffeDetectI::getClientDirectory(const ::Ice::Current& current)
     return clientDir;
 }
 
-bool CaffeDetectI::readModelFile( string model, string clientDir)
+bool CaffeDetectI::readModelFile( string model, string clientDir, 
+                                  string fileListName)
 {
     std::string zipfilename = model;
     DetectorDataArchive dda;
@@ -209,16 +211,29 @@ bool CaffeDetectI::readModelFile( string model, string clientDir)
     chdir(clientDir.c_str());
     bool res = true;
 
-    mCaffe_net = new caffe::Net<float>(model);
-
-    /* TODO check if model load worked
-    if (cascade->load(model.c_str()) == false)
+    if (fileListName.size() > 0)
     {
-        localAndClientMsg( VLogger::WARN, NULL,
-                       "unable to load classifier from %s\n", model.c_str());
-        res = false;
+	caffe::NetParameter netParams;
+	caffe::ReadNetParamsFromTextFileOrDie(model, &netParams);
+	// Find the IMAGE_DATA layer and change the file name
+	int layer_id;
+	for (layer_id = 0; layer_id < netParams.layers_size(); layer_id++)
+	{
+	    caffe::LayerParameter* layer_param =
+	                             netParams.mutable_layers(layer_id);
+	    if (layer_param->has_image_data_param())
+	    {
+		caffe::ImageDataParameter* dp = 
+		                 layer_param->mutable_image_data_param();
+		dp->set_source(fileListName);
+		break;
+	    }
+	}
+	mCaffe_net = new caffe::Net<float>(netParams);
+    }else
+    {
+	mCaffe_net = new caffe::Net<float>(model);
     }
-    */
 
     if (!weights.empty())
     {
@@ -349,6 +364,7 @@ void CaffeDetectI::process( const Identity &client,
   //////////////////////////////////////////////////////////////////////////
   // Start - RunsetWrapper
   mServiceMan->setStoppable();  
+  localAndClientMsg(VLogger::DEBUG, NULL, "Creating RunsetWrapper.\n");
   cvac::RunSetWrapper mRunsetWrapper(&runset,m_CVAC_DataDir,mServiceMan);
   mServiceMan->clearStop();
   if(!mRunsetWrapper.isInitialized())
@@ -362,13 +378,14 @@ void CaffeDetectI::process( const Identity &client,
   // For some reason OutputResults causes a memory error "bad linked list"
   // when stopIcebox is called so we will output results manually.
 
-  localAndClientMsg(VLogger::DEBUG, NULL, "Starting run set iterator.\n");
+  localAndClientMsg(VLogger::DEBUG, NULL, "Creating run set iterator.\n");
   //////////////////////////////////////////////////////////////////////////
   // Start - RunsetIterator
   int nSkipFrames = 150;  //the number of skip frames
   mServiceMan->setStoppable();
   cvac::RunSetIterator mRunsetIterator(&mRunsetWrapper,mRunsetConstraint,
                                        mServiceMan,callback,nSkipFrames);
+  localAndClientMsg(VLogger::DEBUG, NULL, "Run set iterator created.\n");
   mServiceMan->clearStop();
   if(!mRunsetIterator.isInitialized())
   {
@@ -377,48 +394,124 @@ void CaffeDetectI::process( const Identity &client,
     return;
   } 
   // End - RunsetIterator
-  // TODO change to use clients temp directory
+ 
+  // If the user sent us a file list then use that over the Runset
+  // since we assume that its a big list and we already created it if
+  // the file exists.  If it does not exist then create it.
+  // If the user passed in a fileList we need to symbolic link it
+  // to the one expected in the net prototext file
+
   string clientDir = getClientDirectory(current);
-  string tempname = "/filelist.txt";
-  string tempfile =  clientDir + tempname;
-  ofstream tempf;
-  tempf.open(tempfile.c_str()); 
-  if (tempf.is_open() == false)
+  string tempListFile = getTempFilename(clientDir, "filelist");
+  bool fileListExists = false;
+  string fileListPath;
+  if (mDetectorProps->fileList.size() > 0)
   {
-    localAndClientMsg(VLogger::ERROR, callback,
-      "Could not open file %s for writing.\n", tempfile.c_str());
-    return;
+
+      fileListPath = m_CVAC_DataDir + "/" + mDetectorProps->fileList;
+      if (fileExists(fileListPath))
+          fileListExists = true;
+      tempListFile = fileListPath;
   }
-  mServiceMan->setStoppable();
   int cnt = 0;
   vector<Result *> resultList;
   vector<Labelable *> labelList;
-  while(mRunsetIterator.hasNext())
+  if (mDetectorProps->fileList.size() == 0 || fileListExists == false)
   {
-    if((mServiceMan != NULL) && (mServiceMan->stopRequested()))
-    {        
-      mServiceMan->stopCompleted();
-      break;
-    }
+      ofstream tempf;
+      tempf.open(tempListFile.c_str()); 
+      if (tempf.is_open() == false)
+      {
+	localAndClientMsg(VLogger::ERROR, callback,
+	  "Could not open file %s for writing.\n", tempListFile.c_str());
+	return;
+      }
+      mServiceMan->setStoppable();
+      localAndClientMsg(VLogger::DEBUG, NULL, "Starting run set iterator.\n");
+      while(mRunsetIterator.hasNext())
+      {
+	if((mServiceMan != NULL) && (mServiceMan->stopRequested()))
+	{        
+	  mServiceMan->stopCompleted();
+	  break;
+	}
     
-    cvac::Labelable& labelable = *(mRunsetIterator.getNext());
-    Result &curres = mRunsetIterator.getCurrentResult();
-    resultList.push_back(&curres);
-    labelList.push_back(&labelable);
-    string fullname;
-    FilePath fpath = RunSetWrapper::getFilePath(labelable);
-    if (pathAbsolute(fpath.directory.relativePath))
-        fullname = fpath.directory.relativePath + "/" + fpath.filename;
-    else
-        fullname = getFSPath( fpath, m_CVAC_DataDir );
-    tempf << fullname << " 0" << endl; 
-    cnt++;
-  }  
-  tempf.close();
+	cvac::Labelable& labelable = *(mRunsetIterator.getNext());
+	Result &curres = mRunsetIterator.getCurrentResult();
+	resultList.push_back(&curres);
+	labelList.push_back(&labelable);
+	string fullname;
+	FilePath fpath = RunSetWrapper::getFilePath(labelable);
+	if (pathAbsolute(fpath.directory.relativePath))
+	    fullname = fpath.directory.relativePath + "/" + fpath.filename;
+	else
+	    fullname = getFSPath( fpath, m_CVAC_DataDir );
+	tempf << fullname << " 0" << endl; 
+	cnt++;
+      }  
+      tempf.close();
+  }else
+  { // We need to count the number of lines in the file (= files)
+    // and we need to create a labelable and a result
+      ifstream tempf;
+      tempf.open(fileListPath.c_str()); 
+      if (tempf.is_open() == false)
+      {
+	 localAndClientMsg(VLogger::ERROR, callback,
+	  "Could not open file %s for reading.\n", fileListPath.c_str());
+	 return;
+      }
+      string filen;
+      string labelVal;
+      while (tempf >> filen >> labelVal)
+      {
+          cvac::Label label;
+	  label.hasLabel = true;
+	  label.name = labelVal;
+	  string dir = getFileDirectory(filen);
+	  string fname = getFileName(filen);
+	  cvac::DirectoryPath dpath;
+	  dpath.relativePath = dir;
+	  cvac::FilePath fpath;
+	  fpath.directory = dpath;
+	  fpath.filename = fname;
+	  cvac::ImageSubstratePtr sub = new ImageSubstrate(0,0, fpath);
+	  cvac::LabelablePtr labptr = new Labelable(0,label, sub);
+	  labelList.push_back(&(*labptr));
+	  cvac::Result  *resptr = new Result();
+	  resptr->original = labptr;
+	  resultList.push_back(resptr);
+	  cnt++;
+      }
+      tempf.close();
+  }
+  /*
+  if (mDetectorProps->fileList.size() > 0)
+  { // Link it to the one in the net file
+      if (fileExists(tempListFile))
+      {
+#ifdef WIN32
+          _unlink(tempListFile.c_str());
+#else
+          unlink(tempListFile.c_str());
+#endif
+
+      }
+      if (makeSymlinkFile(tempListFile, fileListPath) == false)
+      {
+	  localAndClientMsg(VLogger::ERROR, callback,
+              "Could link list file from %s to %s.\n", 
+	       fileListPath.c_str(),
+	       tempListFile.c_str());
+	  return;
+      }
+  }
+  */
   // We wait to read the model file and initialize the Net until after
   // we create the temp file list.
   string modelfile = getFSPath( model, m_CVAC_DataDir );
-  if (readModelFile(modelfile, clientDir) == false)
+  localAndClientMsg(VLogger::DEBUG, NULL, "Reading model file.\n");
+  if (readModelFile(modelfile, clientDir, tempListFile) == false)
   {
     localAndClientMsg(VLogger::ERROR, callback,
       "Could not initialize the Net with model file %s for writing.\n", 
@@ -454,6 +547,10 @@ void CaffeDetectI::process( const Identity &client,
 	      const std::string& output_name = mCaffe_net->blob_names()[
 		    mCaffe_net->output_blob_indices()[j]];
 	      printf("output=%s, score=%g\n", output_name.c_str(), score);
+	      // To get the probabilities
+	      // const shared_ptr<Blob<float>>&probs = 
+	      //                  mCaffe_net.blob_by_name("prob");
+	      // const float *probs_out = probs->cpu_data();
 	      if (output_name == "output")
 	      {
 		  string labelname;
@@ -532,6 +629,7 @@ DetectorPropertiesI::DetectorPropertiesI()
     gpu = true;
     callbackFreq = "labelable";
     iterations = 1;
+    fileList = "";
 }
 
 void DetectorPropertiesI::load(const DetectorProperties &p) 
@@ -581,6 +679,13 @@ bool DetectorPropertiesI::readProps()
             }else
                 gpu = false;
         }
+        if (it->first.compare("fileList") == 0)
+        {
+            if (it->second.size() != 0)
+            {
+                fileList = it->second;
+            }
+        }
         if (it->first.compare("iterations") == 0)
         {
             int cnt = strtol(it->second.c_str(), NULL, 10);
@@ -603,6 +708,7 @@ bool DetectorPropertiesI::writeProps()
     stream << iterations;
     bool res = true;
     props.insert(std::pair<string, string>("callbackFrequency", callbackFreq));
+    props.insert(std::pair<string, string>("fileList", fileList));
     if (gpu == true)
         props.insert(std::pair<string, string>("gpu", "true"));
     else
