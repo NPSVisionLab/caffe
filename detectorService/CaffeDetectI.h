@@ -114,6 +114,10 @@ private:
     DetectorPropertiesI   *mDetectorProps;
     caffe::Net<float>             *mCaffe_net;
     std::vector<std::string>  mLookup;
+    int mWidth;
+    int mHeight;
+    bool mHasMemoryData;
+    bool mHasImageData;
 
 };
 }

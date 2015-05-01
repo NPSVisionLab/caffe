@@ -105,6 +105,10 @@ CaffeDetectI::CaffeDetectI()
   , mServiceMan(NULL)
   , gotModel(false)
 {
+    mHasMemoryData = false;
+    mHasImageData = false;
+    mWidth = 0;
+    mHeight = 0;
 }
 
 CaffeDetectI::~CaffeDetectI()
@@ -118,6 +122,8 @@ void CaffeDetectI::setServiceManager(ServiceManagerI *sman)
 
 void CaffeDetectI::starting()
 {
+  FLAGS_logtostderr = true;
+  google::InitGoogleLogging(mServiceMan->getServiceName().c_str());
   m_CVAC_DataDir = mServiceMan->getDataDir();	
 
   /*
@@ -192,7 +198,7 @@ bool CaffeDetectI::readModelFile( string model, string clientDir,
     if (model.empty())
     {
         localAndClientMsg( VLogger::WARN, NULL,
-                             "unable to load model from archive file %s\n", zipfilename.c_str());
+	 "unable to load model from archive file %s\n", zipfilename.c_str());
         return false;
     }
     string weights = dda.getFile(WEIGHTID);
@@ -211,29 +217,49 @@ bool CaffeDetectI::readModelFile( string model, string clientDir,
     chdir(clientDir.c_str());
     bool res = true;
 
-    if (fileListName.size() > 0)
+    caffe::NetParameter netParams;
+    caffe::ReadNetParamsFromTextFileOrDie(model, &netParams);
+    // Find the IMAGE_DATA layer and change the file name
+    int layer_id;
+    int batch_size;
+    for (layer_id = 0; layer_id < netParams.layers_size(); layer_id++)
     {
-	caffe::NetParameter netParams;
-	caffe::ReadNetParamsFromTextFileOrDie(model, &netParams);
-	// Find the IMAGE_DATA layer and change the file name
-	int layer_id;
-	for (layer_id = 0; layer_id < netParams.layers_size(); layer_id++)
+	caffe::LayerParameter* layer_param =
+				 netParams.mutable_layers(layer_id);
+	if (layer_param->has_image_data_param())
 	{
-	    caffe::LayerParameter* layer_param =
-	                             netParams.mutable_layers(layer_id);
-	    if (layer_param->has_image_data_param())
-	    {
-		caffe::ImageDataParameter* dp = 
-		                 layer_param->mutable_image_data_param();
-		dp->set_source(fileListName);
-		break;
-	    }
+	    // IMAGE_DATA has a major problem.  It does not return
+	    // an error of a bad file in the file list unless its the
+	    // first one and if its the first one it terminates the 
+	    // program.  Both are bad so generate warning until
+	    // this gets fixed in Caffe.
+	    localAndClientMsg( VLogger::WARN, NULL,
+	     "IMAGE_DATA will fail if an imagefile is missing or corrupt!");
+
+	    caffe::ImageDataParameter* dp = 
+			     layer_param->mutable_image_data_param();
+	    dp->set_source(fileListName);
+	    mHasImageData = true;
+	    break;
 	}
-	mCaffe_net = new caffe::Net<float>(netParams);
-    }else
-    {
-	mCaffe_net = new caffe::Net<float>(model);
+	if (layer_param->has_memory_data_param())
+	{
+	    const caffe::MemoryDataParameter& dp = 
+			     layer_param->memory_data_param();
+	    batch_size = dp.batch_size();
+	    if (batch_size != 1)
+	    {
+		localAndClientMsg( VLogger::ERROR, NULL,
+		 "Only batch_size of 1 is supported\n" );
+		return false;
+	    }
+	    mHasMemoryData = true;
+	    mWidth = dp.width();
+	    mHeight = dp.height();
+	    break;
+	}
     }
+    mCaffe_net = new caffe::Net<float>(netParams);
 
     if (!weights.empty())
     {
@@ -522,16 +548,54 @@ void CaffeDetectI::process( const Identity &client,
   // Go through the runset again.  We run the net for each file
   // and save the result.  Here we assume that the order will be the same!
   int i;
+  float loss = 0.0;
   for (i = 0; i < cnt; i++)
   {
-      vector<Blob<float>*> dummy_bvec;
-      float loss;
-      const vector<Blob<float>*>& result = 
-                                    mCaffe_net->Forward(dummy_bvec, &loss);
+      const vector<Blob<float>*>* resultPtr;
+      if (mHasMemoryData)
+      {
+	  /** Read the data in ourselfs.  We have to do that since
+	   * caffe does not report any errors loading the file and
+	   * it continually tries to load the same one.
+	   */
+	  Labelable *lptr = labelList[i]; 
+	  string fullname;
+	  FilePath fpath = RunSetWrapper::getFilePath(*lptr);
+	  if (pathAbsolute(fpath.directory.relativePath))
+	      fullname = fpath.directory.relativePath + "/" + fpath.filename;
+	  else
+	      fullname = getFSPath( fpath, m_CVAC_DataDir );
+	  caffe::Datum datum;
+	  // Pass in a label of zero
+	  if (ReadImageToDatum(fullname, 0, mHeight, mWidth, &datum))
+	  {
+	      std::vector<caffe::Datum> images;
+	      float loss = 0.0;
+	      images.push_back(datum);
+	      boost::dynamic_pointer_cast< caffe::MemoryDataLayer<float> >
+	               (mCaffe_net->layers()[0])->AddDatumVector(images);
+	      float iter_loss;
+	      const vector<Blob<float>*>& result =
+		  mCaffe_net->ForwardPrefilled(&iter_loss);
+	      resultPtr = &result;
+	      loss += iter_loss;
+	  }else
+	  {
+	      continue;  // Skip this file
+	  }
+      }else
+      { // We assume the file was read on via the prototext file
+	  vector<caffe::Blob<float>* > bottom_vec;
+	  float iter_loss;
+	  const vector<Blob<float>*>& result =
+                  mCaffe_net->Forward(bottom_vec, &iter_loss);
+	  resultPtr = &result;
+	  loss += iter_loss;
+      }
+
       //debug
       //printf("CVAC: Net forward ran\n");
-      //printf("CVAC: Output result size %d\n", result.size());
-      Labelable *lptr = labelList[i]; 
+      //printf("CVAC: Output result size %d\n", resultPtr->size());
       Result *rptr = resultList[i]; 
       // Since have batch_size configured to 1, each call to Forward
       // will process the next file.  The results will be the
@@ -539,13 +603,15 @@ void CaffeDetectI::process( const Identity &client,
       // output which will be the classification id as defined
       // synset_words.txt in the caffe directory.
       //
-      for (int j = 0; j < result.size(); ++j) {
-          const float* result_vec = result[j]->cpu_data();
-	  for (int k = 0; k < result[j]->count(); ++k) {
+      for (int j = 0; j < resultPtr->size(); ++j) 
+      {
+	  const float* result_vec = (*resultPtr)[j]->cpu_data();
+	  for (int k = 0; k < (*resultPtr)[j]->count(); ++k)
+	  {
 	      const float score = result_vec[k];
-              int idx = (int)score;
+	      int idx = (int)score;
 	      const std::string& output_name = mCaffe_net->blob_names()[
-		    mCaffe_net->output_blob_indices()[j]];
+			mCaffe_net->output_blob_indices()[j]];
 	      printf("output=%s, score=%g\n", output_name.c_str(), score);
 	      // To get the probabilities
 	      // const shared_ptr<Blob<float>>&probs = 
@@ -562,7 +628,7 @@ void CaffeDetectI::process( const Identity &client,
 		      if (sidx != string::npos)
 			  labelname = labelname.substr(0,sidx);
 		      printf("classid=%d, labelName=%s\n", idx, 
-		           labelname.c_str());
+			   labelname.c_str());
 		  }else
 		  {
 		      char buffer[64];
@@ -581,12 +647,12 @@ void CaffeDetectI::process( const Identity &client,
 		  callback->foundNewResults(resSet);
 		  // Remove it since we notified the client
 		  rptr->foundLabels.pop_back();
-	          //outputres.addResult(*rptr, *lptr, std::vector<cv::Rect>(), 
+		  //outputres.addResult(*rptr, *lptr, std::vector<cv::Rect>(), 
 		  //                   labelname, 1.0f);
-              }
+	      }
           }
       }
-    }
+  }
 
   // We are done so send any final results
   mServiceMan->clearStop();
